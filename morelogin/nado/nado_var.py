@@ -45,7 +45,18 @@ def get_url(symbol, platform="nado"):
 
 
 def open_page(playwright, env_id, url):
-    """打开指定环境并访问页面，返回页面对象"""
+    """
+    打开指定环境并访问页面，返回页面对象
+    如果页面已经打开，会复用已打开的页面
+    
+    Args:
+        playwright: Playwright对象
+        env_id: 环境ID
+        url: 目标URL
+    
+    Returns:
+        Page对象，如果失败返回None
+    """
     cdp_url = start(env_id, None)
     if cdp_url is None:
         return None
@@ -53,6 +64,33 @@ def open_page(playwright, env_id, url):
     try:
         browser = playwright.chromium.connect_over_cdp(cdp_url)
         ctx = browser.contexts[0]
+        
+        # 检查是否已经有打开的页面匹配目标URL
+        existing_pages = ctx.pages
+        for existing_page in existing_pages:
+            try:
+                current_url = existing_page.url
+                # 比较URL（忽略协议、查询参数等）
+                # 提取主要部分进行比较
+                url_main = url.split('?')[0].split('#')[0]
+                current_url_main = current_url.split('?')[0].split('#')[0]
+                
+                if url_main in current_url_main or current_url_main in url_main:
+                    print(f"  检测到已打开的页面: {current_url}")
+                    print(f"  复用现有页面，无需重新打开")
+                    # 如果当前URL不完全匹配，导航到目标URL
+                    if current_url != url:
+                        try:
+                            existing_page.goto(url, timeout=120000, wait_until="domcontentloaded")
+                        except Exception as nav_e:
+                            print(f"  导航到目标URL时出错: {nav_e}，继续使用当前页面")
+                    return existing_page
+            except Exception as check_e:
+                # 如果检查页面URL时出错，跳过这个页面
+                continue
+        
+        # 如果没有找到匹配的页面，创建新页面
+        print(f"  未找到匹配的已打开页面，创建新页面")
         page = ctx.new_page()
         # 增加超时时间到120秒，使用domcontentloaded等待策略（更快）
         page.goto(url, timeout=120000, wait_until="domcontentloaded")
@@ -782,42 +820,91 @@ def fill_quantity_variational(page, size):
         return False
 
 
-def click_submit_variational(page, symbol):
+def click_submit_variational(page, symbol, direction="long", max_retries=5):
     """
-    在variational页面点击确认按钮
+    在variational页面点击确认按钮（带重试机制）
     
     Args:
         page: Playwright页面对象
         symbol: 交易对符号
+        direction: 方向，"long"表示做多（买），"short"表示做空（卖）
+        max_retries: 最大重试次数，默认5次
     
     Returns:
         bool: 是否成功点击
     """
-    try:
-        # 查找所有提交按钮
-        buttons = page.query_selector_all('button[data-testid="submit-button"]')
-        
-        for button in buttons:
-            # 获取按钮文本
-            button_text = button.inner_text().strip()
+    # 根据方向确定匹配条件
+    if direction == "long":
+        # 做多：匹配包含"买"和bg-green的按钮
+        expected_text = "买"
+        expected_class = "bg-green"
+    else:
+        # 做空：匹配包含"卖"和bg-red的按钮
+        expected_text = "卖"
+        expected_class = "bg-red"
+    
+    for attempt in range(1, max_retries + 1):
+        try:
+            # 查找所有提交按钮
+            buttons = page.query_selector_all('button[data-testid="submit-button"]')
             
-            # 只匹配包含symbol的按钮（不匹配中文"买"或"卖"）
-            if symbol not in button_text:
-                continue
+            if not buttons:
+                if attempt < max_retries:
+                    print(f"  第 {attempt} 次尝试: 未找到提交按钮，等待后重试...")
+                    safe_sleep(0.5)
+                    continue
+                else:
+                    print(f"  错误: 未找到任何提交按钮 (data-testid='submit-button')")
+                    return False
             
-            # 检查按钮是否disabled
-            is_disabled = button.get_attribute('disabled') is not None
-            if is_disabled:
-                continue
+            for button in buttons:
+                # 获取按钮文本
+                button_text = button.inner_text().strip()
+                
+                # 必须包含symbol和对应的方向文本（"买"或"卖"）
+                if symbol not in button_text or expected_text not in button_text:
+                    continue
+                
+                # 检查按钮的class是否包含对应的背景色
+                button_class = button.get_attribute('class') or ''
+                if expected_class not in button_class:
+                    continue
+                
+                # 检查按钮是否disabled
+                is_disabled = button.get_attribute('disabled') is not None
+                if is_disabled:
+                    if attempt < max_retries:
+                        print(f"  第 {attempt} 次尝试: 按钮被禁用，等待后重试...")
+                        safe_sleep(0.5)
+                        break  # 跳出按钮循环，进行下一次重试
+                    else:
+                        print(f"  错误: 按钮被禁用，无法点击")
+                        continue  # 继续检查其他按钮
+                
+                # 找到匹配的按钮，点击
+                if attempt > 1:
+                    print(f"  第 {attempt} 次尝试: 找到可用按钮，点击...")
+                button.click()
+                return True
             
-            # 找到匹配的按钮，点击
-            button.click()
-            return True
-        
-        return False
-    except Exception as e:
-        print(f"Variational确认按钮错误: {e}")
-        return False
+            # 如果所有按钮都不匹配或都被禁用，进行重试
+            if attempt < max_retries:
+                print(f"  第 {attempt} 次尝试: 未找到匹配的可用按钮，等待后重试...")
+                safe_sleep(0.5)
+            else:
+                print(f"  错误: 经过 {max_retries} 次尝试，仍未找到匹配的可用按钮")
+                print(f"  需要: 包含'{symbol}'和'{expected_text}'，class包含'{expected_class}'，且未禁用")
+                return False
+                
+        except Exception as e:
+            if attempt < max_retries:
+                print(f"  第 {attempt} 次尝试出错: {e}，等待后重试...")
+                safe_sleep(0.5)
+            else:
+                print(f"Variational确认按钮错误: {e}")
+                return False
+    
+    return False
 
 
 def execute_variational_short(pages, configs, size=None):
@@ -859,7 +946,7 @@ def execute_variational_short(pages, configs, size=None):
     
     # 点击确认按钮
     print("\n步骤3: 点击确认按钮...")
-    if click_submit_variational(variational_page, symbol):
+    if click_submit_variational(variational_page, symbol, direction="short"):
         print(f"\nVariational做空订单已提交: {symbol}, 大小: {size}")
         return True
     else:
@@ -897,7 +984,7 @@ def execute_variational_long(pages, configs, size=None):
     # 等待页面处理输入
     safe_sleep(0.5)
     
-    if click_submit_variational(variational_page, symbol):
+    if click_submit_variational(variational_page, symbol, direction="long"):
         print(f"Variational做多已提交: {size}")
         return True
     else:
@@ -1199,13 +1286,19 @@ def method3(pages, configs):
         is_filled = execute_nado_order_with_retry(nado_page, symbol, size, price_offset, "long", max_retries=999)
         
         # 如果订单成交，执行Variational做空操作
-        if is_filled:
-            print("\n执行Variational做空操作...")
-            execute_variational_short(pages, configs)
+        # if is_filled:
+        #     print("\n执行Variational做空操作...")
+        #     execute_variational_short(pages, configs)
         
         # 检查并调整持仓对冲情况
         print("\n检查持仓对冲情况...")
-        safe_sleep(3)
+        cancel_all_orders(nado_page, symbol)
+        check_and_adjust_hedge(pages, configs, show_details=True)
+        safe_sleep(10)
+        check_and_adjust_hedge(pages, configs, show_details=True)
+        safe_sleep(10)
+        check_and_adjust_hedge(pages, configs, show_details=True)
+        safe_sleep(10)
         check_and_adjust_hedge(pages, configs, show_details=True)
         
         # 如果不是最后一次执行，随机休眠
@@ -1266,13 +1359,21 @@ def method4(pages, configs):
         is_filled = execute_nado_order_with_retry(nado_page, symbol, size, price_offset, "short", max_retries=999)
         
         # 如果订单成交，执行Variational做多操作
-        if is_filled:
-            print("\n执行Variational做多操作...")
-            execute_variational_long(pages, configs)
+        # if is_filled:
+        #     print("\n执行Variational做多操作...")
+        #     execute_variational_long(pages, configs)
         
         # 检查并调整持仓对冲情况
         print("\n检查持仓对冲情况...")
-        safe_sleep(3)
+        cancel_all_orders(nado_page, symbol)
+        check_and_adjust_hedge(pages, configs, show_details=True)
+        safe_sleep(10)
+        check_and_adjust_hedge(pages, configs, show_details=True)
+        safe_sleep(10)
+        check_and_adjust_hedge(pages, configs, show_details=True)
+        safe_sleep(10)
+        check_and_adjust_hedge(pages, configs, show_details=True)
+        safe_sleep(10)
         check_and_adjust_hedge(pages, configs, show_details=True)
         
         # 如果不是最后一次执行，随机休眠
@@ -1323,27 +1424,43 @@ def method5(pages, configs):
         # 步骤1: 单次做多Nado做空Variational
         print(f"\n[步骤1] 执行做多Nado做空Variational操作")
         is_filled_long = execute_nado_order_with_retry(nado_page, symbol, size, price_offset, "long", max_retries=999)
-        if is_filled_long:
-            print("\n执行Variational做空操作...")
-            execute_variational_short(pages, configs)
+        # if is_filled_long:
+        #     print("\n执行Variational做空操作...")
+        #     execute_variational_short(pages, configs)
         
         # 步骤2: 休眠随机秒数
         sleep_time = random.randint(sleep_min, sleep_max)
         print(f"\n[步骤2] 等待 {sleep_time} 秒...")
-        safe_sleep(3)
+        cancel_all_orders(nado_page, symbol)
+        check_and_adjust_hedge(pages, configs, show_details=True)
+        safe_sleep(10)
+        check_and_adjust_hedge(pages, configs, show_details=True)
+        safe_sleep(10)
+        check_and_adjust_hedge(pages, configs, show_details=True)
+        safe_sleep(10)
+        check_and_adjust_hedge(pages, configs, show_details=True)
+        safe_sleep(10)
         check_and_adjust_hedge(pages, configs, show_details=True)
         safe_sleep(sleep_time)
         
         # 步骤3: 单次做空Nado做多Variational
         print(f"\n[步骤3] 执行做空Nado做多Variational操作")
         is_filled_short = execute_nado_order_with_retry(nado_page, symbol, size, price_offset, "short", max_retries=999)
-        if is_filled_short:
-            print("\n执行Variational做多操作...")
-            execute_variational_long(pages, configs)
+        # if is_filled_short:
+        #     print("\n执行Variational做多操作...")
+        #     execute_variational_long(pages, configs)
         
         # 检查持仓对冲情况
         print("\n[检查2] 检查持仓对冲情况...")
-        safe_sleep(3)
+        cancel_all_orders(nado_page, symbol)
+        check_and_adjust_hedge(pages, configs, show_details=True)
+        safe_sleep(10)
+        check_and_adjust_hedge(pages, configs, show_details=True)
+        safe_sleep(10)
+        check_and_adjust_hedge(pages, configs, show_details=True)
+        safe_sleep(10)
+        check_and_adjust_hedge(pages, configs, show_details=True)
+        safe_sleep(10)
         check_and_adjust_hedge(pages, configs, show_details=True)
         
         # 休眠后继续下一轮循环
@@ -1509,15 +1626,26 @@ def check_and_adjust_hedge(pages, configs, show_details=True):
     
     if show_details:
         direction_map = {1: '做多', -1: '做空', 0: '无持仓'}
-        print(f"    Nado: {nado_position_str or '未找到'} (数值: {nado_value}, 方向: {direction_map.get(nado_direction, '未知')})")
+        
+        # 对于Nado，如果未找到持仓但方向为0，视为0持仓，避免显示None/未找到
+        if not nado_position_str and nado_direction == 0:
+            nado_display_str = f"0 {symbol}"
+            nado_display_value = 0.0
+        else:
+            nado_display_str = nado_position_str or '未找到'
+            nado_display_value = nado_value
+        
+        print(f"    Nado: {nado_display_str} (数值: {nado_display_value}, 方向: {direction_map.get(nado_direction, '未知')})")
         print(f"    Var: {var_position_str or '未找到'} (数值: {var_value}, 方向: {direction_map.get(var_direction, '未知')})")
     
     # 检查前置条件
-    if nado_value is None:
+    # 如果解析失败且方向非0，说明持仓信息确实异常，跳过本次检查
+    if nado_value is None and nado_direction != 0:
         if show_details:
-            print("  无法获取Nado持仓信息，跳过检查")
+            print("  无法获取有效的Nado持仓信息，跳过检查")
         return False
     
+    # 如果方向为0，说明Nado当前无持仓，直接跳过对冲逻辑
     if nado_direction == 0:
         if show_details:
             print("  Nado无持仓，暂不处理")
