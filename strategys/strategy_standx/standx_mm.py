@@ -170,7 +170,7 @@ def place_orders_by_prices(place_long, place_short, adapter, symbol, quantity):
     # 做多订单：buy
     for price in place_long:
         try:
-            adapter.place_order(
+            order = adapter.place_order(
                 symbol=symbol,
                 side="buy",
                 order_type="limit",
@@ -179,13 +179,14 @@ def place_orders_by_prices(place_long, place_short, adapter, symbol, quantity):
                 time_in_force="gtc",
                 reduce_only=False
             )
-        except:
-            pass
+            print(f"[下单成功][多单] 价格={price}, 数量={quantity_decimal}, 订单ID={getattr(order, 'order_id', None)}")
+        except Exception as e:
+            print(f"[下单失败][多单] 价格={price}, 数量={quantity_decimal}, 错误={e}")
     
     # 做空订单：sell
     for price in place_short:
         try:
-            adapter.place_order(
+            order = adapter.place_order(
                 symbol=symbol,
                 side="sell",
                 order_type="limit",
@@ -194,8 +195,9 @@ def place_orders_by_prices(place_long, place_short, adapter, symbol, quantity):
                 time_in_force="gtc",
                 reduce_only=False
             )
-        except:
-            pass
+            print(f"[下单成功][空单] 价格={price}, 数量={quantity_decimal}, 订单ID={getattr(order, 'order_id', None)}")
+        except Exception as e:
+            print(f"[下单失败][空单] 价格={price}, 数量={quantity_decimal}, 错误={e}")
 
 
 def calculate_cancel_orders(target_long, target_short, current_long, current_short):

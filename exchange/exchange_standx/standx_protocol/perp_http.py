@@ -178,8 +178,10 @@ class StandXPerpHTTP:
         if not auth:
             raise ValueError("StandXAuth instance is required for request signing")
         
+        # 使用服务器时间进行签名，避免本地时间与服务器偏差导致签名过期
+        region_info = self.get_region()
         request_id = str(uuid.uuid4())
-        timestamp = int(time.time() * 1000)  # milliseconds for timestamp header
+        timestamp = int(region_info.system_time)
         sign_headers = auth.sign_request(payload_str, request_id, timestamp)
         headers.update(sign_headers)
         
@@ -354,8 +356,10 @@ class StandXPerpHTTP:
         if not auth:
             raise ValueError("StandXAuth instance is required for request signing")
         
+        # 使用服务器时间进行签名，避免本地时间与服务器偏差导致签名过期
+        region_info = self.get_region()
         request_id = str(uuid.uuid4())
-        timestamp = int(time.time() * 1000)  # milliseconds for timestamp header
+        timestamp = int(region_info.system_time)
         sign_headers = auth.sign_request(payload_str, request_id, timestamp)
         headers.update(sign_headers)
         
