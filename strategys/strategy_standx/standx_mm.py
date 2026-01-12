@@ -338,7 +338,7 @@ def calculate_place_orders(target_long, target_short, current_long, current_shor
 
 
 def close_position_if_exists(adapter, symbol):
-    """检查持仓，如果有持仓则市价平仓
+    """检查持仓，如果有持仓则先取消所有未成交订单，然后市价平仓
     
     注意: StandX 适配器的持仓查询接口可能未实现，此功能可能无法使用
     
@@ -349,7 +349,11 @@ def close_position_if_exists(adapter, symbol):
     try:
         position = adapter.get_position(symbol)
         if position and position.size != Decimal("0"):
-            print(f"检测到持仓: {position.size} {position.side}, 市价平仓中...")
+            print(f"检测到持仓: {position.size} {position.side}")
+            print("取消所有未成交订单...")
+            adapter.cancel_all_orders(symbol=symbol)
+            # 然后市价平仓
+            print("市价平仓中...")
             adapter.close_position(symbol, order_type="market")
             print("平仓完成")
         # 如果 position 为 None，说明 StandX 适配器的持仓查询接口可能未实现
