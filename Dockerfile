@@ -5,9 +5,19 @@ FROM python:3.11-slim
 # Set the working directory in the container
 WORKDIR /app
 
-# Install git, as some python packages might be installed from git repos
-# Also, clean up apt-get cache to keep the image small
-RUN apt-get update && apt-get install -y --no-install-recommends git && \
+# Install dependencies for building TA-Lib and git for VCS access.
+# Then, download, compile, and install the TA-Lib C library from source.
+# Finally, clean up to keep the image size small.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends build-essential wget git && \
+    wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz && \
+    tar -xzf ta-lib-0.4.0-src.tar.gz && \
+    cd ta-lib/ && \
+    ./configure --prefix=/usr && \
+    make && \
+    make install && \
+    cd .. && \
+    rm -rf ta-lib ta-lib-0.4.0-src.tar.gz && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy the requirements file into the container
