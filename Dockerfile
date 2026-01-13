@@ -1,15 +1,27 @@
-# Use the full Debian "Bullseye" image which has ta-lib-dev in its repositories.
-# This is simpler and faster than compiling from source, though the image is larger.
-FROM python:3.11-bullseye
+# Base on the slim Python image to keep the size down
+FROM python:3.11-slim-bullseye
 
 # Set the working directory in the container
 WORKDIR /app
 
-# Install ta-lib-dev from apt, which is the method described in the README.
-# The package for building against is typically 'ta-lib-dev'.
-# Also install git for any potential VCS dependencies.
+# Install build dependencies for ta-lib, download and build it from source
+# as per the official documentation, then clean up.
+# Git is also installed for any potential VCS dependencies.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ta-lib-dev git && \
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        wget \
+        git && \
+    wget https://github.com/ta-lib/ta-lib/releases/download/v0.6.4/ta-lib-0.6.4-src.tar.gz -q -O ta-lib-0.6.4-src.tar.gz && \
+    tar -xzf ta-lib-0.6.4-src.tar.gz && \
+    cd ta-lib-0.6.4/ && \
+    ./configure --prefix=/usr && \
+    make && \
+    make install && \
+    cd .. && \
+    rm -rf ta-lib-0.6.4 ta-lib-0.6.4-src.tar.gz && \
+    apt-get purge -y build-essential wget && \
+    apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy the requirements file into the container
