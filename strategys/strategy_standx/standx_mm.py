@@ -347,7 +347,7 @@ def close_position_if_exists(adapter, symbol):
         symbol: 交易对符号
     """
     try:
-        position = adapter.get_position(symbol)
+        position = adapter.get_positions(symbol)
         if position and position.size != Decimal("0"):
             print(f"检测到持仓: {position.size} {position.side}")
             print("取消所有未成交订单...")

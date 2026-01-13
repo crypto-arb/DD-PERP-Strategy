@@ -75,7 +75,42 @@ class GrvtAdapter(BasePerpAdapter):
     
     def get_positions(self, symbol: Optional[str] = None) -> List[Position]:
         """查询持仓信息"""
-        raise NotImplementedError("GRVT 持仓查询功能待实现")
+        try:
+            symbols = [symbol] if symbol else []
+            positions_data = self.grvt_client.fetch_positions(symbols=symbols)
+            
+            positions = []
+            for pos_data in positions_data:
+                
+                # 获取持仓数量
+                size_str = pos_data.get("size", "0")
+                try:
+                    qty = Decimal(str(size_str))
+                except (ValueError, TypeError) as e:
+                    continue
+                
+                # 如果数量为 0，跳过
+                if qty == Decimal("0"):
+                    continue
+                
+                # 根据数量正负判断方向
+                side = "long" if qty > 0 else "short"
+                
+                position = Position(
+                    symbol=pos_data.get("instrument", symbol or ""),
+                    size=abs(qty),  # 使用绝对值
+                    side=side,
+                    entry_price=Decimal(str(pos_data.get("entry_price", "0"))),
+                    mark_price=Decimal(str(pos_data.get("mark_price", "0"))),
+                    unrealized_pnl=Decimal(str(pos_data.get("unrealized_pnl", "0"))),
+                    leverage=int(pos_data.get("leverage", 1)) if pos_data.get("leverage") else None,
+                    margin_mode=pos_data.get("margin_mode"),
+                )
+                positions.append(position)
+            
+            return positions
+        except Exception as e:
+            raise Exception(f"GRVT 查询持仓失败: {e}")
     
     def _grvt_order_to_order(self, grvt_order: dict, symbol: str) -> Order:
         """将 GRVT 订单格式转换为 Order 对象"""
