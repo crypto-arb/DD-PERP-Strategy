@@ -223,7 +223,7 @@ python notrade_mm.py --exchange grvt
 
 ```bash
 # 使用自定义配置文件
-python notrade_mm.py --exchange standx --config /path/to/config.yaml
+python notrade_mm.py --exchange standx --config config.yaml
 ```
 
 ### 命令行参数
