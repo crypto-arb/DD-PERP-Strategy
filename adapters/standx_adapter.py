@@ -25,6 +25,7 @@ sys.path.insert(0, project_root)
 
 from exchange.exchange_standx.standx_protocol.perps_auth import StandXAuth
 from exchange.exchange_standx.standx_protocol.perp_http import StandXPerpHTTP
+from exchange.exchange_standx.standx_protocol.perps_wss import StandXMarketStream
 from eth_account.messages import encode_defunct
 from eth_account import Account
 from web3 import Web3
@@ -73,6 +74,7 @@ class StandXAdapter(BasePerpAdapter):
         
         base_url = config.get("base_url", "https://perps.standx.com")
         self.http_client = StandXPerpHTTP(base_url=base_url)
+        self.market_stream: Optional[StandXMarketStream] = None
         
         # 根据配置选择认证方式
         if self.api_key:
@@ -186,6 +188,19 @@ class StandXAdapter(BasePerpAdapter):
                 return True
         except Exception as e:
             raise Exception(f"StandX 认证失败: {e}")
+
+    async def connect_market_stream(self) -> StandXMarketStream:
+        """连接市场 WebSocket（公共频道无需认证）"""
+        if not self.market_stream:
+            self.market_stream = StandXMarketStream()
+        if not self.market_stream.connected:
+            await self.market_stream.connect()
+        return self.market_stream
+
+    async def subscribe_market(self, channel: str, symbol: str, callback=None):
+        """订阅市场 WebSocket 频道"""
+        stream = await self.connect_market_stream()
+        await stream.subscribe(channel, symbol, callback=callback)
     
     def get_balance(self) -> Balance:
         """查询账户余额"""

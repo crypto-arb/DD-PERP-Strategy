@@ -6,6 +6,8 @@ This module implements BasePerpAdapter for GRVT exchange.
 import sys
 import os
 import time
+import asyncio
+import logging
 from typing import Dict, Any, Optional, List
 from decimal import Decimal
 
@@ -22,7 +24,8 @@ if grvt_sdk_path not in sys.path:
     sys.path.insert(0, grvt_sdk_path)
 
 from pysdk.grvt_ccxt import GrvtCcxt
-from pysdk.grvt_ccxt_env import GrvtEnv
+from pysdk.grvt_ccxt_env import GrvtEnv, GrvtWSEndpointType
+from pysdk.grvt_ccxt_ws import GrvtCcxtWS
 
 
 class GrvtAdapter(BasePerpAdapter):
@@ -59,6 +62,7 @@ class GrvtAdapter(BasePerpAdapter):
         
         # 初始化 GRVT 客户端
         self.grvt_client = GrvtCcxt(env=self.env, parameters=parameters)
+        self.ws_client: Optional[GrvtCcxtWS] = None
     
     def connect(self) -> bool:
         """
@@ -68,6 +72,37 @@ class GrvtAdapter(BasePerpAdapter):
             bool: 连接是否成功
         """
         return True
+
+    async def connect_ws(self) -> GrvtCcxtWS:
+        """连接 GRVT WebSocket（市场数据无需认证）"""
+        if not self.ws_client:
+            params = {
+                "api_key": self.config.get("api_key", ""),
+                "trading_account_id": self.config.get("trading_account_id", ""),
+                "private_key": self.config.get("private_key", ""),
+                "api_ws_version": self.config.get("api_ws_version", "v1"),
+            }
+            loop = asyncio.get_running_loop()
+            logger = logging.getLogger("grvt_ws")
+            self.ws_client = GrvtCcxtWS(env=self.env, loop=loop, logger=logger, parameters=params)
+            await self.ws_client.initialize()
+        return self.ws_client
+
+    async def subscribe_ws(
+        self,
+        stream: str,
+        params: Dict[str, Any],
+        callback,
+        ws_end_point_type: Optional[GrvtWSEndpointType] = None,
+    ):
+        """订阅 GRVT WebSocket 市场数据"""
+        ws_client = await self.connect_ws()
+        await ws_client.subscribe(
+            stream=stream,
+            callback=callback,
+            params=params,
+            ws_end_point_type=ws_end_point_type,
+        )
     
     def get_balance(self) -> Balance:
         """查询账户余额"""
@@ -196,21 +231,21 @@ class GrvtAdapter(BasePerpAdapter):
         client_order_id: Optional[str] = None,
     ) -> bool:
         """撤单
-        
-        注意：GRVT 的 order_id 实际上是 client_order_id，所以优先使用 client_order_id
         """
         params = {}
-        # 优先使用 client_order_id，如果没有则使用 order_id（在 GRVT 中，order_id 就是 client_order_id）
+        # 0x 开头视为交易所 order_id
+        if order_id and str(order_id).startswith("0x"):
+            return self.grvt_client.cancel_order(id=str(order_id), symbol=symbol, params=params)
+        # 优先使用 client_order_id
         if client_order_id:
-            params["client_order_id"] = client_order_id
+            params["client_order_id"] = str(client_order_id)
         elif order_id:
-            params["client_order_id"] = order_id
-        
+            params["client_order_id"] = str(order_id)
         return self.grvt_client.cancel_order(id=None, symbol=symbol, params=params)
     
     def cancel_orders_by_ids(
         self,
-        order_id_list: List[int],
+        order_id_list: List[Any],
         symbol: Optional[str] = None,
     ) -> bool:
         """批量撤单
@@ -222,8 +257,15 @@ class GrvtAdapter(BasePerpAdapter):
         success_count = 0
         for order_id in order_id_list:
             try:
-                if self.cancel_order(client_order_id=str(order_id), symbol=symbol):
-                    success_count += 1
+                order_id_str = str(order_id)
+                if order_id_str.startswith("0x"):
+                    # 看起来是交易所 order_id
+                    if self.cancel_order(order_id=order_id_str, symbol=symbol):
+                        success_count += 1
+                else:
+                    # 默认按 client_order_id 处理
+                    if self.cancel_order(client_order_id=order_id_str, symbol=symbol):
+                        success_count += 1
             except Exception:
                 continue  # 跳过失败的订单
         
