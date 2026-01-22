@@ -108,9 +108,24 @@ class GrvtCcxtWS(GrvtCcxtPro):
         self._loop.create_task(self.connect_all_channels())
 
     def is_connection_open(self, grvt_endpoint_type: GrvtWSEndpointType) -> bool:
-        return (
-            self.ws[grvt_endpoint_type] is not None and self.ws[grvt_endpoint_type].open
-        )
+        ws = self.ws[grvt_endpoint_type]
+        return self._is_ws_open(ws)
+
+    @staticmethod
+    def _is_ws_open(ws: websockets.WebSocketClientProtocol | None) -> bool:
+        """兼容不同 websockets 版本的连接状态判断"""
+        if ws is None:
+            return False
+        if hasattr(ws, "open"):
+            return bool(ws.open)
+        if hasattr(ws, "closed"):
+            return not bool(ws.closed)
+        state = getattr(ws, "state", None)
+        if state is not None:
+            # state 可能是枚举或字符串
+            name = getattr(state, "name", "")
+            return name == "OPEN" or str(state) == "State.OPEN"
+        return False
 
     def is_endpoint_connected(self, grvt_endpoint_type: GrvtWSEndpointType) -> bool:
         """
@@ -187,6 +202,7 @@ class GrvtCcxtWS(GrvtCcxtPro):
                         additional_headers=extra_headers,
                         logger=self.logger,
                         open_timeout=5,
+                        proxy=None,
                     )
                     self.logger.info(
                         f"{FN} Connected to {self.api_url[grvt_endpoint_type]} {extra_headers=}"
@@ -202,6 +218,7 @@ class GrvtCcxtWS(GrvtCcxtPro):
                     additional_headers=extra_headers,
                     logger=self.logger,
                     open_timeout=5,
+                    proxy=None,
                 )
                 self.logger.info(f"{FN} Connected to {self.api_url[grvt_endpoint_type]} {extra_headers=}")
         except (
@@ -305,7 +322,10 @@ class GrvtCcxtWS(GrvtCcxtPro):
                                 .get(selector, None)
                             )
                             if callback:
-                                await callback(message)
+                                if asyncio.iscoroutinefunction(callback):
+                                    await callback(message)
+                                else:
+                                    callback(message)
                                 stream: str = self.get_non_versioned_stream(
                                     stream_subscribed
                                 )
@@ -355,7 +375,7 @@ class GrvtCcxtWS(GrvtCcxtPro):
 
     async def _send(self, end_point_type: GrvtWSEndpointType, message: str):
         try:
-            if self.ws[end_point_type] and self.ws[end_point_type].open:
+            if self._is_ws_open(self.ws[end_point_type]):
                 self.logger.info(
                     f"{self._clsname} _send() {end_point_type=}"
                     f" url:{self.api_url[end_point_type]} {message=}"
